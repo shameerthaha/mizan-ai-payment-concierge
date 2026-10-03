@@ -1,0 +1,177 @@
+# Collections Call Flow — starter workflow template for Venkata
+# 
+# This is a conceptual workflow blueprint for the ElevenLabs Converational AI
+# agent's call flow logic. Each step maps to a phase in the call that the
+# agent executes using the backend tools.
+
+workflow_name: collections-call-emirates-nbd
+version: "0.1.0"
+bank: EMIRATES_NBD
+
+phases:
+  - id: call_initiation
+    name: "Call Initiation"
+    description: "Dial the customer, wait for answer, detect voicemail"
+    steps:
+      - action: dial
+        config:
+          retry_on_busy: true
+          max_rings: 5
+          voicemail_action: leave_callback_message
+      - action: detect_answer
+        config:
+          greeting_timeout_seconds: 3
+
+  - id: identification
+    name: "Identity Verification"
+    description: "Confirm caller is speaking to the account holder"
+    depends_on: call_initiation
+    steps:
+      - action: tool_call
+        tool: lookup_customer
+        params:
+          customer_identifier: "${inbound_phone_number}"
+        store_as: customer_data
+      - action: verify_identity
+        config:
+          verification_method: "ask_date_of_birth_last_4_digits"
+          max_retries: 2
+      - action: branch
+        if: "customer_data.found == false"
+        then: request_account_number
+        else: proceed
+
+  - id: disclosure
+    name: "CBUAE Disclosure"
+    description: "Per-call identification per CBUAE 5.2.5.6(d)"
+    depends_on: identification
+    mandatory: true
+    steps:
+      - action: speak_script
+        script: |
+          "This call is from Emirates NBD Collections Department.
+           My name is {$agent_name}. Our contact number is 600-54-0000.
+           Our working hours are 9 AM to 8 PM, Sunday to Thursday.
+           This call may be recorded for quality and compliance purposes."
+
+  - id: purpose_statement
+    name: "Purpose Disclosure"
+    description: "State the reason for the call"
+    depends_on: disclosure
+    steps:
+      - action: speak
+        text: "I'm calling regarding your outstanding balance of {$customer_data.total_outstanding} AED. I have some options to help you manage this."
+
+  - id: balance_presentation
+    name: "Balance Presentation"
+    description: "Present the outstanding amount with breakdown"
+    depends_on: purpose_statement
+    steps:
+      - action: tool_call
+        tool: get_outstanding_amount
+        params:
+          customer_id: "${customer_data.customer_id}"
+        store_as: outstanding_data
+      - action: speak
+        text: |
+          "Your current outstanding balance is {$outstanding_data.total_outstanding} AED.
+           This includes {$outstanding_data.principal} AED in principal,
+           {$outstanding_data.interest} AED in interest, and
+           {$outstanding_data.fees} AED in fees."
+
+  - id: solution_presentation
+    name: "Solution Offering"
+    description: "Present ranked settlement options"
+    depends_on: balance_presentation
+    steps:
+      - action: tool_call
+        tool: rank_solutions
+        params:
+          customer_id: "${customer_data.customer_id}"
+          total_outstanding: "${outstanding_data.total_outstanding}"
+          dpd_days: "${customer_data.dpd_days}"
+          missed_payments: "${customer_data.missed_payments}"
+        store_as: solutions
+      - action: speak_ranked_options
+        config:
+          present_top: 3
+          format: "numbered_description"
+
+  - id: handle_response
+    name: "Handle Customer Response"
+    description: "Navigate the interaction based on customer's choice"
+    depends_on: solution_presentation
+    steps:
+      - action: listen_and_categorize
+        categories:
+          - type: accepted_settlement
+            action: proceed_to_solution
+          - type: accepted_ptp
+            action: set_ptp_agreement
+          - type: request_hardship
+            action: offer_hardship_program
+          - type: request_human
+            action: escalate_to_human
+          - type: objection
+            action: handle_objection
+          - type: decline
+            action: document_and_close
+          - type: confused
+            action: reexplain_simplified
+
+  - id: payment_processing
+    name: "Payment Processing"
+    description: "Guide the customer through payment"
+    depends_on: handle_response
+    steps:
+      - action: guide_payment
+        config:
+          payment_methods: ["online_banking", "card", "bank_transfer"]
+          provide_reference: true
+      - action: confirm_outcome
+        log_outcome: "completed"
+
+  - id: ptp_agreement
+    name: "Promise-to-Pay Setup"
+    description: "Record a Promise-to-Pay agreement"
+    depends_on: handle_response
+    steps:
+      - action: confirm_ptp_details
+        params:
+          amount: "${selected_solution.estimated_payment}"
+          due_date: "${ptp_calculated_date}"
+      - action: set_ptp
+        log_outcome: "ptp_set"
+
+  - id: hardship_offer
+    name: "Hardship Program Offer"
+    description: "Present the hardship program with reduced payments"
+    depends_on: handle_response
+    steps:
+      - action: explain_hardship_program
+      - action: speak
+        text: "I can transfer you to our financial hardship team who will work with you on a reduced payment plan. Would you like me to do that?"
+      - action: branch
+        if: "customer_agrees"
+        then: escalate_to_human
+        else: document_refusal
+
+  - id: call_closure
+    name: "Call Closure"
+    description: "End the call with summary and recording disclosure"
+    depends_on:
+      - payment_processing
+      - ptp_agreement
+      - hardship_offer
+    steps:
+      - action: speak_summary
+      - action: speak
+        text: "Thank you for your time. Remember, you can contact Emirates NBD at 600-54-0000 during working hours if you have any questions. This call has been recorded. Goodbye."
+      - action: hangup
+      - action: log_outcome
+
+# Notes:
+# 1. The "tool_call" steps invoke the backend webhook endpoints
+# 2. The backend pre-computes all data before the call — no live lookups
+# 3. Compliance floor is enforced at backend level, not in the agent's script
+# 4. This blueprint maps to the ElevenLabs agent builder's workflow editor

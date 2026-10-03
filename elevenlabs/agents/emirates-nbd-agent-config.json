@@ -1,0 +1,67 @@
+{
+  "agent_name": "collection-agent-emirates-nbd",
+  "description": "Main collections voice agent for Emirates NBD — handles outbound collections calls with pre-computed settlement options.",
+  "version": "0.1.0",
+  "language": "en",
+  "voice": {
+    "provider": "elevenlabs",
+    "voice_id": "21m00Tcm4TlvDq8ikWAM",
+    "settings": {
+      "stability": 0.5,
+      "similarity_boost": 0.75,
+      "style": 0.3,
+      "use_speaker_boost": true
+    }
+  },
+  "prompt": {
+    "system_prompt": "You are Mizan, a collections assistant calling on behalf of Emirates NBD. Your role is to contact customers about outstanding balances, present pre-computed settlement options, handle objections professionally, and maintain compliance with CBUAE regulations at all times.\n\nKey rules:\n1. Always identify yourself and Emirates NBD at the start of every call.\n2. State the purpose of the call clearly: you're calling about an outstanding balance.\n3. Present the pre-computed options in ranked order (best for the customer first).\n4. Never pressure the customer. Allow them time to consider options.\n5. If the customer requests hardship assistance, promptly offer the hardship program.\n6. If the customer is distressed or requests to speak to a human, escalate immediately.\n7. Do not deviate from the pre-computed amounts and solutions.\n8. Log the outcome of every call (solution accepted, PTP set, escalation required, etc.).\n9. Do not disclose customer information to third parties.\n10. Comply with CBUAE contact window (09:00-20:00).",
+    "tools": [
+      "lookup_customer",
+      "get_outstanding_amount",
+      "rank_solutions"
+    ],
+    "knowledge_base": [],
+    "context_injection": {
+      "compliance_floor": "Injected at call start via webhook response"
+    }
+  },
+  "webhook": {
+    "url": "https://your-backend.com/elevenlabs/webhook",
+    "headers": {
+      "X-Api-Key": "${ELEVENLABS_API_KEY}"
+    },
+    "tools_config": [
+      {
+        "name": "lookup_customer",
+        "description": "Look up a customer by account number, phone number, or email. Returns account details and compliance context.",
+        "endpoint": "customer/lookup",
+        "method": "POST"
+      },
+      {
+        "name": "get_outstanding_amount",
+        "description": "Get the customer's current outstanding balance with principal/interest/fees breakdown.",
+        "endpoint": "outstanding/amount",
+        "method": "POST"
+      },
+      {
+        "name": "rank_solutions",
+        "description": "Get pre-computed, ranked settlement options for the customer. The agent presents these to the customer during the call.",
+        "endpoint": "solutions/rank",
+        "method": "POST"
+      }
+    ]
+  },
+  "call_flow": {
+    "default": [
+      "open_call -> identify_self -> state_purpose -> lookup_customer",
+      "lookup_customer -> balance_presentation -> present_solutions",
+      "present_solutions -> handle_response",
+      "handle_response -> accepted -> payment_processing -> call_closure",
+      "handle_response -> ptp_requested -> set_ptp -> call_closure",
+      "handle_response -> hardship_requested -> offer_hardship -> call_closure",
+      "handle_response -> escalation_needed -> escalate_to_human -> call_closure",
+      "handle_response -> declined -> document_objection -> call_closure"
+    ]
+  },
+  "notes": "This is a starter configuration. Update the webhook URL and API key before deploying in the ElevenLabs agent builder. The agent ID and deployed URL should be set in the environment once deployed."
+}
